@@ -31,6 +31,19 @@ func ExportAsTemplateFile(filter *ResourceFilter, withAnnotations bool, ocClient
 	}
 	m := f.(map[string]interface{})
 
+	// ocClient.Export returns a list, but we want to have a template ...
+	if _, ok := m["items"]; ok {
+		m["objects"] = m["items"]
+		delete(m, "items")
+		kindPointer, _ := gojsonpointer.NewJsonPointer("/kind")
+		_, err := kindPointer.Set(m, "Template")
+		if err != nil {
+			return "", fmt.Errorf(
+				"Could not convert list to template: %s", err,
+			)
+		}
+	}
+
 	objectsPointer, _ := gojsonpointer.NewJsonPointer("/objects")
 	items, _, err := objectsPointer.Get(m)
 	if err != nil {

@@ -30,8 +30,17 @@ var (
 		"/status",
 		"/spec/volumeName",
 		"/spec/template/metadata/creationTimestamp",
+		"/spec/jobTemplate/metadata/creationTimestamp",
+		"/spec/jobTemplate/spec/template/metadata/creationTimestamp",
 		"/groupNames",
 		"/userNames",
+		"/spec/clusterIP",
+		"/metadata/namespace",
+		"/metadata/resourceVersion",
+		"/metadata/selfLink",
+		"/metadata/uid",
+		"/imagePullSecrets",
+		"/secrets",
 	}
 	platformManagedRegexFields = []string{
 		"^/spec/triggers/[0-9]*/imageChangeParams/lastTriggeredImage",
@@ -87,6 +96,7 @@ type ResourceItem struct {
 	TailorManagedAnnotations  []string
 	TailorAppliedConfigFields map[string]string
 	AnnotationsPresent        bool
+	Comparable                bool
 }
 
 func NewResourceItem(m map[string]interface{}, source string) (*ResourceItem, error) {
@@ -144,13 +154,15 @@ func (i *ResourceItem) TailorManagedAnnotationsList() string {
 // for template and platform items, with no knowledge of the "other" item - it
 // may or may not exist.
 func (i *ResourceItem) parseConfig(m map[string]interface{}) error {
-	// Extract kind and name
+	// Extract kind
 	kindPointer, _ := gojsonpointer.NewJsonPointer("/kind")
 	kind, _, err := kindPointer.Get(m)
 	if err != nil {
 		return err
 	}
 	i.Kind = kind.(string)
+
+	// Extract name
 	namePointer, _ := gojsonpointer.NewJsonPointer("/metadata/name")
 	name, _, noNameErr := namePointer.Get(m)
 	if noNameErr == nil {
@@ -162,6 +174,30 @@ func (i *ResourceItem) parseConfig(m map[string]interface{}) error {
 			return fmt.Errorf("Resource does not have paths /metadata/name or /metadata/generateName: %s", err)
 		}
 		i.Name = generateName.(string)
+	}
+
+	// Determine if item is comparable and therefore releavnt for Tailor
+	i.Comparable = true
+	if i.Kind == "Secret" {
+		typePointer, _ := gojsonpointer.NewJsonPointer("/type")
+		typeVal, _, err := typePointer.Get(m)
+		if err != nil {
+			return fmt.Errorf("Secret has no field /type: %s", err)
+		}
+		irrelevantSecrets := []string{
+			"kubernetes.io/dockercfg",
+			"kubernetes.io/service-account-token",
+		}
+		if utils.Includes(irrelevantSecrets, typeVal.(string)) {
+			i.Comparable = false
+			cli.DebugMsg(
+				"Removed secret",
+				i.Name,
+				"of type",
+				typeVal.(string),
+				"as it cannot be compared properly",
+			)
+		}
 	}
 
 	// Extract labels
@@ -255,7 +291,7 @@ func (i *ResourceItem) parseConfig(m map[string]interface{}) error {
 		deletePointer, _ := gojsonpointer.NewJsonPointer(p)
 		_, _ = deletePointer.Delete(m)
 		if utils.Includes(legacyFields, p) {
-			cli.VerboseMsg("Removed", p, "which is used for legacy clients, but not supported by Tailor")
+			cli.DebugMsg("Removed", p, "which is used for legacy clients, but not supported by Tailor")
 		}
 	}
 
